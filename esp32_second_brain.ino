@@ -322,18 +322,18 @@ enum Screen { SCR_CLOCK, SCR_TODO };
 void drawBusy(const char* s) {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x12_tf);
-  u8g2.drawUTF8(0, 11, "ESP32 brain");
-  u8g2.drawHLine(0, 14, 128);
+  u8g2.drawUTF8(0, 12, "ESP32 brain");
+  u8g2.drawHLine(0, 15, 128);
   u8g2.drawUTF8(0, 38, s);
   u8g2.sendBuffer();
 }
 void drawClock() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawUTF8(0, 8, WiFi.status() == WL_CONNECTED ? "WiFi" : "No WiFi");
+  u8g2.drawUTF8(0, 10, WiFi.status() == WL_CONNECTED ? "WiFi" : "No WiFi");
   char r[16]; snprintf(r, sizeof r, "T:%d", (int)gTodoCount);
-  u8g2.drawUTF8(128 - u8g2.getStrWidth(r), 8, r);
-  u8g2.drawHLine(0, 11, 128);
+  u8g2.drawUTF8(128 - u8g2.getStrWidth(r), 10, r);
+  u8g2.drawHLine(0, 13, 128);
   char tb[8], db[28];
   if (timeOk()) {
     struct tm tm; time_t n = time(nullptr); localtime_r(&n, &tm);
@@ -341,7 +341,7 @@ void drawClock() {
     strftime(db, sizeof db, "%a %d.%m.%Y", &tm);
   } else { strcpy(tb, "--:--"); strcpy(db, "syncing time..."); }
   u8g2.setFont(u8g2_font_logisoso28_tr);
-  u8g2.drawUTF8((128 - u8g2.getStrWidth(tb)) / 2, 47, tb);
+  u8g2.drawUTF8((128 - u8g2.getStrWidth(tb)) / 2, 49, tb);
   u8g2.setFont(u8g2_font_6x12_tf);
   u8g2.drawUTF8((128 - u8g2.getStrWidth(db)) / 2, 62, db);
   u8g2.sendBuffer();
@@ -352,17 +352,17 @@ void drawTodo() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
   String h = "TODO (" + String(cnt) + " open)";
-  u8g2.drawUTF8(0, 9, h.c_str());
-  u8g2.drawHLine(0, 11, 128);
+  u8g2.drawUTF8(0, 10, h.c_str());
+  u8g2.drawHLine(0, 12, 128);
   int pages = max(1, ((int)L.size() + 4) / 5);
   int page = (millis() / 4000) % pages;
-  if (pages > 1) { String p = String(page + 1) + "/" + String(pages); u8g2.drawUTF8(128 - u8g2.getStrWidth(p.c_str()), 9, p.c_str()); }
+  if (pages > 1) { String p = String(page + 1) + "/" + String(pages); u8g2.drawUTF8(128 - u8g2.getStrWidth(p.c_str()), 10, p.c_str()); }
   if (L.empty()) u8g2.drawUTF8(0, 32, "Nothing to do!");
   for (int i = 0; i < 5; i++) {
     int k = page * 5 + i;
     if (k >= (int)L.size()) break;
     String s = clip(oneLine(String(k + 1) + "." + L[k]), 21);
-    u8g2.drawUTF8(0, 22 + i * 10, s.c_str());
+    u8g2.drawUTF8(0, 23 + i * 9, s.c_str());
   }
   u8g2.sendBuffer();
 }
@@ -1227,7 +1227,15 @@ void syncTime() {
   for (int i = 0; i < 60 && !timeOk(); i++) delay(250);
 }
 
-uint32_t lastRem = 0, lastWifiTry = 0;
+uint32_t lastRem = 0, lastWifiTry = 0, wifiDownSince = 0;
+bool bootMsgSent = false;
+const uint32_t WIFI_RESTART_MS = 600000UL;  // restart if WiFi stays down for 10 min
+
+// Registers the command menu and tells you the device is up. Returns true if Telegram got it.
+bool announceOnline() {
+  tgSetCommands();
+  return tgSend("🧠 Online" + String(timeOk() ? ", " + fmtDT(time(nullptr)) : String("")) + ". Send /help.") >= 0;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -1240,16 +1248,19 @@ void setup() {
   refreshTodoCache();
   connectWifi();
   syncTime();
-  tgSetCommands();
-  tgSend("🧠 Online" + String(timeOk() ? ", " + fmtDT(time(nullptr)) : String("")) + ". Send /help.");
+  if (WiFi.status() == WL_CONNECTED) bootMsgSent = announceOnline();  // otherwise sent from loop() once WiFi is up
   clearBusy();
 }
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
+    if (!wifiDownSince) wifiDownSince = millis();
+    if (millis() - wifiDownSince > WIFI_RESTART_MS) { Serial.println("WiFi down >10 min, restarting"); delay(100); ESP.restart(); }
     if (millis() - lastWifiTry > 15000) { lastWifiTry = millis(); WiFi.disconnect(); wifiBegin(); }
     delay(500); return;
   }
+  wifiDownSince = 0;
+  if (!bootMsgSent) { bootMsgSent = announceOnline(); if (!bootMsgSent) delay(3000); }
   if (!timeOk() && millis() % 20000 < 600) configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
   pollTelegram();
   if (millis() - lastRem > 30000) { lastRem = millis(); checkReminders(); }
